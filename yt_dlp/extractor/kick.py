@@ -96,10 +96,10 @@ class KickVODIE(KickBaseIE):
     IE_NAME = 'kick:vod'
     _VALID_URL = r'https?://(?:www\.)?kick\.com/(?P<channel>[\w-]+)/videos/(?P<id>[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12})'
     _TESTS = [{
-        # Regular VOD
-        'url': 'https://kick.com/sardinetin/videos/c9767533-04d9-48a9-ac74-af838e2f2151',
+        # Regular VOD (UUIDv7 id, as used on the site since the id scheme change)
+        'url': 'https://kick.com/sardinetin/videos/019fba4d-f4f8-7c3f-b52f-570fed2956af',
         'info_dict': {
-            'id': 'c9767533-04d9-48a9-ac74-af838e2f2151',
+            'id': '019fba4d-f4f8-7c3f-b52f-570fed2956af',
             'ext': 'mp4',
             'title': 'Sardine Tin Day 1 | Welcome to the Space Station | https://sardinetin.stream',
             'description': str,
@@ -123,12 +123,26 @@ class KickVODIE(KickBaseIE):
         'only_matching': True,
     }]
 
+    def _match_video(self, videos, video_id):
+        for item in videos:
+            if traverse_obj(item, ('video', 'uuid')) == video_id:
+                return item
+        hex_id = video_id.replace('-', '')
+        if len(hex_id) != 32 or hex_id[12] != '7':
+            return None
+        # UUIDv7 ids on the site encode the stream start time as a millisecond timestamp
+        video_ts = int(hex_id[:12], 16) // 1000
+        for item in videos:
+            if any(
+                unified_timestamp(traverse_obj(item, key, expected_type=str)) == video_ts
+                for key in ('start_time', 'created_at')):
+                return item
+        return None
+
     def _real_extract(self, url):
         channel, video_id = self._match_valid_url(url).group('channel', 'id')
         videos = self._call_api(f'v2/channels/{channel}/videos', video_id, note='Downloading channel video list')
-        response = next((
-            item for item in videos
-            if traverse_obj(item, ('video', 'uuid')) == video_id), None)
+        response = self._match_video(videos, video_id)
         if not response:
             raise ExtractorError(
                 f'Unable to find VOD {video_id} in the recent videos of {channel}', expected=True)
