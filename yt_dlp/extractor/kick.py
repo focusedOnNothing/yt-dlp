@@ -3,6 +3,7 @@ import urllib.parse
 
 from .common import InfoExtractor
 from ..utils import (
+    ExtractorError,
     UserNotLive,
     determine_ext,
     float_or_none,
@@ -93,72 +94,65 @@ class KickIE(KickBaseIE):
 
 class KickVODIE(KickBaseIE):
     IE_NAME = 'kick:vod'
-    _VALID_URL = r'https?://(?:www\.)?kick\.com/[\w-]+/videos/(?P<id>[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12})'
+    _VALID_URL = r'https?://(?:www\.)?kick\.com/(?P<channel>[\w-]+)/videos/(?P<id>[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12})'
     _TESTS = [{
         # Regular VOD
-        'url': 'https://kick.com/xqc/videos/5c697a87-afce-4256-b01f-3c8fe71ef5cb',
+        'url': 'https://kick.com/sardinetin/videos/c9767533-04d9-48a9-ac74-af838e2f2151',
         'info_dict': {
-            'id': '5c697a87-afce-4256-b01f-3c8fe71ef5cb',
+            'id': 'c9767533-04d9-48a9-ac74-af838e2f2151',
             'ext': 'mp4',
-            'title': '🐗LIVE🐗CLICK🐗HERE🐗DRAMA🐗ALL DAY🐗NEWS🐗VIDEOS🐗CLIPS🐗GAMES🐗STUFF🐗WOW🐗IM HERE🐗LETS GO🐗COOL🐗VERY NICE🐗',
-            'description': 'THE BEST AT ABSOLUTELY EVERYTHING. THE JUICER. LEADER OF THE JUICERS.',
-            'uploader': 'xQc',
-            'uploader_id': '676',
-            'channel': 'xqc',
-            'channel_id': '668',
+            'title': 'Sardine Tin Day 1 | Welcome to the Space Station | https://sardinetin.stream',
+            'description': str,
+            'uploader': 'SardineTin',
+            'uploader_id': '70066596',
+            'channel': 'sardinetin',
+            'channel_id': '68903209',
             'view_count': int,
             'age_limit': 18,
-            'duration': 22278.0,
-            'thumbnail': r're:^https?://.*\.jpg',
-            'categories': ['Deadlock'],
-            'timestamp': 1756082443,
-            'upload_date': '20250825',
-        },
-        'params': {'skip_download': 'm3u8'},
-    }, {
-        # VOD of ongoing livestream (at the time of writing the test, ID rotates every two days)
-        'url': 'https://kick.com/a-log-burner/videos/5230df84-ea38-46e1-be4f-f5949ae55641',
-        'info_dict': {
-            'id': '5230df84-ea38-46e1-be4f-f5949ae55641',
-            'ext': 'mp4',
-            'title': r're:😴 Cozy Fireplace ASMR 🔥 | Relax, Focus, Sleep 💤',
-            'description': 'md5:080bc713eac0321a7b376a1b53816d1b',
-            'uploader': 'A_Log_Burner',
-            'uploader_id': '65114691',
-            'channel': 'a-log-burner',
-            'channel_id': '63967687',
-            'view_count': int,
-            'age_limit': 18,
-            'thumbnail': r're:^https?://.*\.jpg',
-            'categories': ['Other, Watch Party'],
+            'duration': 681.0,
+            'thumbnail': r're:^https?://.*\.webp',
+            'categories': ['Just Chatting'],
             'timestamp': int,
             'upload_date': str,
-            'live_status': 'is_live',
+            'is_live': False,
         },
-        'skip': 'live',
+        'params': {'skip_download': 'm3u8'},
+        'skip': 'Kick VODs expire within days',
+    }, {
+        'url': 'https://kick.com/xqc/videos/85b6a444-2305-4e4f-b618-6a4e1cf002eb',
+        'only_matching': True,
     }]
 
     def _real_extract(self, url):
-        video_id = self._match_id(url)
-        response = self._call_api(f'v1/video/{video_id}', video_id)
+        channel, video_id = self._match_valid_url(url).group('channel', 'id')
+        videos = self._call_api(f'v2/channels/{channel}/videos', video_id, note='Downloading channel video list')
+        response = next((
+            item for item in videos
+            if traverse_obj(item, ('video', 'uuid')) == video_id), None)
+        if not response:
+            raise ExtractorError(
+                f'Unable to find VOD {video_id} in the recent videos of {channel}', expected=True)
+        channel_info = self._call_api(f'v2/channels/{channel}', video_id, note='Downloading channel info')
 
         return {
             'id': video_id,
+            'channel': channel,
             'formats': self._extract_m3u8_formats(response['source'], video_id, 'mp4'),
             **traverse_obj(response, {
-                'title': ('livestream', ('session_title', 'slug'), {str}, any),
-                'description': ('livestream', 'channel', 'user', 'bio', {str}),
-                'channel': ('livestream', 'channel', 'slug', {str}),
-                'channel_id': ('livestream', 'channel', 'id', {int}, {str_or_none}),
-                'uploader': ('livestream', 'channel', 'user', 'username', {str}),
-                'uploader_id': ('livestream', 'channel', 'user_id', {int}, {str_or_none}),
-                'timestamp': ('created_at', {parse_iso8601}),
-                'duration': ('livestream', 'duration', {float_or_none(scale=1000)}),
-                'thumbnail': ('livestream', 'thumbnail', {url_or_none}),
-                'categories': ('livestream', 'categories', ..., 'name', {str}),
+                'title': ('session_title', {str}),
+                'channel_id': ('channel_id', {int}, {str_or_none}),
+                'timestamp': ('created_at', {unified_timestamp}),
+                'duration': ('duration', {float_or_none(scale=1000)}),
+                'thumbnail': ('thumbnail', 'src', {url_or_none}),
+                'categories': ('categories', ..., 'name', {str}),
                 'view_count': ('views', {int_or_none}),
-                'age_limit': ('livestream', 'is_mature', {bool}, {lambda x: 18 if x else 0}),
-                'is_live': ('livestream', 'is_live', {bool}),
+                'age_limit': ('is_mature', {bool}, {lambda x: 18 if x else 0}),
+                'is_live': ('is_live', {bool}),
+            }),
+            **traverse_obj(channel_info, {
+                'description': ('user', 'bio', {str}),
+                'uploader': ('user', 'username', {str}),
+                'uploader_id': ('user', 'id', {int}, {str_or_none}),
             }),
         }
 
